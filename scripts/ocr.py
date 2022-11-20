@@ -43,8 +43,8 @@ DIGITS_LOOKUP = {
 }
 
 
-def test_image(img):
-    cv2.imshow('', img)
+def test_image(name, img):
+    cv2.imshow(name, img)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
 
@@ -60,7 +60,7 @@ def get_edges(imagepath: str):
     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
     edged = cv2.Canny(blurred, 50, 200, 255)
     if DEBUG:
-        test_image(edged)
+        test_image("edged", edged)
 
     # find contours in the edge map, then sort them by their
     # size in descending order
@@ -79,7 +79,7 @@ def get_edges(imagepath: str):
             displayCnt = approx
             break
 
-    if not displayCnt:
+    if displayCnt is None:
         log.fatal("Did not find display in image")
         sys.exit(1)
 
@@ -88,7 +88,7 @@ def get_edges(imagepath: str):
     warped = four_point_transform(gray, displayCnt.reshape(4, 2))
     output = four_point_transform(image, displayCnt.reshape(4, 2))
     if DEBUG:
-        test_image(output)
+        test_image("output", output)
 
     # threshold the warped image, then apply a series of morphological
     # operations to cleanup the thresholded image
@@ -96,12 +96,13 @@ def get_edges(imagepath: str):
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (1, 5))
     thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
     if DEBUG:
-        test_image(thresh)
+        test_image("thresh", thresh)
 
     # find contours in the thresholded image, then initialize the
     # digit contours lists
     dilate = cv2.dilate(thresh, None, iterations=4)
-    # test_image(dilate)
+    if DEBUG:
+        test_image("dilated", dilate)
     cnts = cv2.findContours(dilate, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     cnts = imutils.grab_contours(cnts)
     digitCnts = []
@@ -116,7 +117,7 @@ def get_edges(imagepath: str):
             digitCnts.append(c)
 
     if DEBUG:
-        test_image(output)
+        test_image("output", output)
 
     # sort the contours from left-to-right, then initialize the
     # actual digits themselves
@@ -153,7 +154,7 @@ def get_edges(imagepath: str):
             for segment in segments:
                 cv2.rectangle(img, (x + segment[0][0], y + segment[0][1]),
                               (x + segment[0][0] + segment[1][0], y + segment[0][1] + segment[1][1]), (0, 0, 255), 1)
-            test_image(img)
+            test_image("img", img)
 
 
 # ToDo: here is the error
@@ -177,7 +178,7 @@ def get_edges(imagepath: str):
         cv2.rectangle(output, (x, y), (x + w, y + h), (0, 255, 0), 1)
         cv2.putText(output, str(digit), (x - 10, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 0), 2)
 
-        test_image(output)
+        test_image("output", output)
     return
 
 
