@@ -6,14 +6,15 @@ import sys
 
 import click
 
-import cv2
-import numpy as np
+from imutils.perspective import four_point_transform
+from imutils import contours
 import imutils
-import pytesseract
+import numpy as np
+import cv2
 
 log = logging.getLogger(__file__)
 
-options = "outputbase digits"
+DEBUG = True
 
 
 def _configure_logging(verbosity):
@@ -26,76 +27,171 @@ def _configure_logging(verbosity):
 
 
 def test_image(img):
-    log.debug(pytesseract.image_to_string(img, config=options))
     cv2.imshow('', img)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
 
 
-def ocr(imagepath: str):
-    # Webcamera no 0 is used to capture the frames
-    #cap = cv2.VideoCapture(0)
+# define the dictionary of digit segments so we can identify
+# each digit on the thermostat
+DIGITS_LOOKUP = {
+    (1, 1, 0, 0, 0, 0, 0): 100,
+    (1, 1, 1, 0, 1, 1, 1): 0,
+    (0, 0, 1, 0, 0, 1, 0): 1,
+    (1, 0, 1, 1, 1, 1, 0): 2,
+    (1, 0, 1, 1, 0, 1, 1): 3,
+    (0, 1, 1, 1, 0, 1, 0): 4,
+    (1, 1, 0, 1, 0, 1, 1): 5,
+    (1, 1, 0, 1, 1, 1, 1): 6,
+    (1, 0, 1, 0, 0, 1, 0): 7,
+    (1, 1, 1, 1, 1, 1, 1): 8,
+    (1, 1, 1, 1, 0, 1, 1): 9
+}
 
-    # This drives the program into an infinite loop.
-    # Captures the live stream frame-by-frame
-    #, frame = cap.read()
 
-    frame = cv2.imread(imagepath, 0)
-    frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
-    # Converts images from BGR to HSV
-    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-    lower_red = np.array([0, 0, 10])
-    upper_red = np.array([0, 0, 85])
+def grabcut_algorithm(original_image, bounding_box):
 
-    # Here we are defining range of bluecolor in HSV
-    # This creates a mask of white coloured
-    # objects found in the frame.
-    mask = cv2.inRange(hsv, lower_red, upper_red)
+    image = original_image.copy()
+    segment = np.zeros(image.shape[:2], np.uint8)
 
-    # The bitwise and of the frame and mask is done so
-    # that only the blue coloured objects are highlighted
-    # and stored in res
-    res = cv2.bitwise_and(frame, frame, mask=mask)
+    x, y, width, height = bounding_box
+    segment[y:y + height, x:x + width] = 1
 
-    # Blur the image
-    res = cv2.GaussianBlur(res, (13, 13), 0)
-    test_image(res)
-    # Edge detection
-    #edged = cv2.Canny(res, 100, 200)
-    edged = res
-    # Dilate it , number of iterations will depend on the image
-    dilate = cv2.dilate(edged, None, iterations=4)
-    test_image(dilate)
-    # perform erosion
-    erode = cv2.erode(dilate, None, iterations=4)
-    test_image(erode)
+    background_mdl = np.zeros((1, 65), np.float64)
+    foreground_mdl = np.zeros((1, 65), np.float64)
 
-    # make an empty mask
-    mask2 = np.ones(frame.shape[:2], dtype="uint8") * 255
+    cv2.grabCut(image, segment, bounding_box, background_mdl, foreground_mdl, 5, cv2.GC_INIT_WITH_RECT)
 
-    # find contours
-    cnts = cv2.findContours(erode.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    # cnts = cnts[0] if imutils.is_cv2() else cnts[1]
+    new_mask = np.where((segment == 2) | (segment == 0), 0, 1).astype('uint8')
 
-    # orig = frame.copy()
-    # for c in cnts:
-    #     # if the contour is not sufficiently large, ignore it
-    #     if cv2.contourArea(c) < 600:
-    #         cv2.drawContours(mask2, [c], -1, 0, -1)
-    #         continue
+    return image * new_mask[:, :, np.newaxis]
 
-    # # Remove ignored contours
-    # newimage = cv2.bitwise_and(erode.copy(), dilate.copy(), mask=mask2)
-    # # Again perform dilation and erosion
-    # newimage = cv2.dilate(newimage, None, iterations=7)
-    # newimage = cv2.erode(newimage, None, iterations=5)
-    # ret, newimage = cv2.threshold(newimage, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)
 
-    # Tesseract OCR
-    text = pytesseract.image_to_string(erode)
+def get_edges(imagepath: str):
+    # load the example image
+    image = cv2.imread(imagepath)
 
-    # release the captured frame
-    #cap.release()
+    # pre-process the image by resizing it, converting it to
+    # graycale, blurring it, and computing an edge map
+    image = imutils.resize(image, height=500)
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    edged = cv2.Canny(blurred, 50, 200, 255)
+    test_image(edged)
+
+    # find contours in the edge map, then sort them by their
+    # size in descending order
+    cnts = cv2.findContours(edged.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    cnts = imutils.grab_contours(cnts)
+    cnts = sorted(cnts, key=cv2.contourArea, reverse=True)
+    displayCnt = None
+    # loop over the contours
+    for c in cnts:
+        # approximate the contour
+        peri = cv2.arcLength(c, True)
+        approx = cv2.approxPolyDP(c, 0.02 * peri, True)
+        # if the contour has four vertices, then we have found
+        # the thermostat display
+        if len(approx) == 4:
+            displayCnt = approx
+            break
+    # extract the thermostat display, apply a perspective transform
+    # to it
+    warped = four_point_transform(gray, displayCnt.reshape(4, 2))
+    output = four_point_transform(image, displayCnt.reshape(4, 2))
+
+    test_image(output)
+
+    # threshold the warped image, then apply a series of morphological
+    # operations to cleanup the thresholded image
+    thresh = cv2.threshold(warped, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)[1]
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (1, 5))
+    thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
+    test_image(thresh)
+
+    # find contours in the thresholded image, then initialize the
+    # digit contours lists
+    dilate = cv2.dilate(thresh, None, iterations=4)
+    # test_image(dilate)
+    cnts = cv2.findContours(dilate, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    cnts = imutils.grab_contours(cnts)
+    digitCnts = []
+    # loop over the digit area candidates
+    for c in cnts:
+        # compute the bounding box of the contour
+        (x, y, w, h) = cv2.boundingRect(c)
+        cv2.rectangle(output, (x, y), (x + w, y + h), (255, 0, 0), 1)
+
+        # if the contour is sufficiently large, it must be a digit
+        if w >= 60 and (h >= 100 and h <= 200):
+            digitCnts.append(c)
+            # cv2.putText(output, "({w},{h})".format(w=w, h=h), (x - 10, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.65,
+            #             (0, 255, 0), 2)
+
+    test_image(output)
+
+    # sort the contours from left-to-right, then initialize the
+    # actual digits themselves
+    digitCnts = contours.sort_contours(digitCnts, method="left-to-right")[0]
+    digits = []
+
+    if DEBUG:
+        img = cv2.cvtColor(thresh, cv2.COLOR_RGBA2RGB)
+
+    # loop over each of the digits
+    for c in digitCnts:
+        # extract the digit ROI
+        (x, y, w, h) = cv2.boundingRect(c)
+        roi = thresh[y:y + h, x:x + w]
+        # compute the width and height of each of the 7 segments
+        # we are going to examine
+        (roiH, roiW) = roi.shape
+        (dW, dH) = (int(roiW * 0.25), int(roiH * 0.15))
+        dHC = int(roiH * 0.15)
+        dHS = h // 2  # Height of side segments
+        # define the set of 7 segments
+        segments = [
+            ((0, 0), (w, dH)),  # top
+            ((0, 0), (dW, dHS)),  # top-left
+            ((w - dW, 0), (dW, h // 2)),  # top-right
+            (((w // 4), (dHS) - (dHC // 2)), ((w // 2), dHC)),  # center
+            ((0, dHS), (dW, dHS)),  # bottom-left
+            ((w - dW, dHS), (dW, dHS)),  # bottom-right
+            ((0, h - dH), (w, dH))  # bottom
+        ]
+        on = [0] * len(segments)  # create array with len(segments length)
+
+        if DEBUG:
+            for segment in segments:
+                cv2.rectangle(img, (x + segment[0][0], y + segment[0][1]),
+                              (x + segment[0][0] + segment[1][0], y + segment[0][1] + segment[1][1]), (0, 0, 255), 1)
+            test_image(img)
+
+
+# ToDo: here is the error
+
+# loop over the segments
+        for (i, ((xA, yA), (xB, yB))) in enumerate(segments):
+            # extract the segment ROI, count the total number of
+            # thresholded pixels in the segment, and then compute
+            # the area of the segment
+            segROI = roi[yA:yB, xA:xB]
+            total = cv2.countNonZero(segROI)
+            area = (xB - xA) * (yB - yA)
+            print(area)
+            # if the total number of non-zero pixels is greater than
+            # 50% of the area, mark the segment as "on"
+            if area:
+                if total / float(area) > 0.1:
+                    on[i] = 1
+        # lookup the digit and draw it on the image
+        digit = DIGITS_LOOKUP[tuple(on)]
+        digits.append(digit)
+        cv2.rectangle(output, (x, y), (x + w, y + h), (0, 255, 0), 1)
+        cv2.putText(output, str(digit), (x - 10, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 0), 2)
+
+        test_image(output)
+    return
 
 
 @click.command()
@@ -106,7 +202,7 @@ def cli(verbosity: int, imagepath: str):
     """
     _configure_logging(verbosity)
 
-    ocr(imagepath)
+    get_edges(imagepath)
 
     return 0
 
