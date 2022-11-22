@@ -120,8 +120,8 @@ def detect_numbers(image,
         height_prct = h / output.shape[0]
 
         if DEBUG:
-            cv2.putText(img, "{}x{}".format(width_prct, height_prct), (x - 10, y - 10), cv2.FONT_HERSHEY_SCRIPT_SIMPLEX,
-                        0.5, (0, 255, 0), 2)
+            cv2.putText(img, "{:.2f}x{:.2f}".format(width_prct, height_prct), (x - 10, y - 10),
+                        cv2.FONT_HERSHEY_SCRIPT_SIMPLEX, 0.5, (0, 255, 0), 2)
             cv2.rectangle(img, (x, y), (x + w, y + h), (255, 0, 0), 1)
             print("({}/{}), {}x{}".format(x, y, w, h))
 
@@ -143,13 +143,13 @@ def detect_numbers(image,
     digits = []
 
     if DEBUG:
-        img = cv2.cvtColor(thresh, cv2.COLOR_RGBA2RGB)
+        img = cv2.cvtColor(dilate, cv2.COLOR_RGBA2RGB)
 
     # loop over each of the digits
     for c in digitCnts:
         # extract the digit ROI
         (x, y, w, h) = cv2.boundingRect(c)
-        roi = thresh[y:y + h, x:x + w]
+        roi = dilate[y:y + h, x:x + w]
         # compute the width and height of each of the 7 segments
         # we are going to examine
         (roiH, roiW) = roi.shape
