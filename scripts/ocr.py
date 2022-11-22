@@ -49,10 +49,12 @@ def test_image(name, img):
     cv2.destroyAllWindows()
 
 
-def get_edges(imagepath: str):
-    # load the example image
-    image = cv2.imread(imagepath)
-
+def detect_numbers(image,
+                   dilate_iterations=4,
+                   digit_min_width=60,
+                   digit_max_width=200,
+                   digit_min_height=100,
+                   digit_max_height=200):
     # pre-process the image by resizing it, converting it to
     # graycale, blurring it, and computing an edge map
     image = imutils.resize(image, height=500)
@@ -100,24 +102,35 @@ def get_edges(imagepath: str):
 
     # find contours in the thresholded image, then initialize the
     # digit contours lists
-    dilate = cv2.dilate(thresh, None, iterations=4)
+    dilate = cv2.dilate(thresh, None, iterations=dilate_iterations)
     if DEBUG:
         test_image("dilated", dilate)
     cnts = cv2.findContours(dilate, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     cnts = imutils.grab_contours(cnts)
+
+    if DEBUG:
+        img = cv2.cvtColor(thresh, cv2.COLOR_RGBA2RGB)
     digitCnts = []
     # loop over the digit area candidates
     for c in cnts:
         # compute the bounding box of the contour
         (x, y, w, h) = cv2.boundingRect(c)
-        cv2.rectangle(output, (x, y), (x + w, y + h), (255, 0, 0), 1)
+        if DEBUG:
+            cv2.putText(img, "{}x{}".format(w, h), (x - 10, y - 10), cv2.FONT_HERSHEY_SCRIPT_SIMPLEX, 0.5, (0, 255, 0),
+                        2)
+            cv2.rectangle(img, (x, y), (x + w, y + h), (255, 0, 0), 1)
+            print("({}/{}), {}x{}".format(x, y, w, h))
 
         # if the contour is sufficiently large, it must be a digit
-        if w >= 60 and (h >= 100 and h <= 200):
+        if (w >= digit_min_width and w <= digit_max_width) and (h >= digit_min_height and h <= digit_max_height):
             digitCnts.append(c)
 
     if DEBUG:
-        test_image("output", output)
+        test_image("img", img)
+
+    if len(digitCnts) == 0:
+        log.fatal("Did not find objects that fit the specified digit dimensions")
+        sys.exit(1)
 
     # sort the contours from left-to-right, then initialize the
     # actual digits themselves
@@ -156,10 +169,7 @@ def get_edges(imagepath: str):
                               (x + segment[0][0] + segment[1][0], y + segment[0][1] + segment[1][1]), (0, 0, 255), 1)
             test_image("img", img)
 
-
-# ToDo: here is the error
-
-# loop over the segments
+        # loop over the segments
         for (i, ((xA, yA), (xB, yB))) in enumerate(segments):
             # extract the segment ROI, count the total number of
             # thresholded pixels in the segment, and then compute
@@ -172,13 +182,15 @@ def get_edges(imagepath: str):
             if area:
                 if total / float(area) > NON_ZERO_PIXEL_THRESHOLD:
                     on[i] = 1
+
         # lookup the digit and draw it on the image
         digit = DIGITS_LOOKUP.get(tuple(on))
         digits.append(digit)
-        cv2.rectangle(output, (x, y), (x + w, y + h), (0, 255, 0), 1)
-        cv2.putText(output, str(digit), (x - 10, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 0), 2)
+        if DEBUG:
+            cv2.rectangle(output, (x, y), (x + w, y + h), (0, 255, 0), 1)
+            cv2.putText(output, str(digit), (x - 10, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 0), 2)
 
-        test_image("output", output)
+            test_image("output", output)
     return
 
 
@@ -189,14 +201,38 @@ def get_edges(imagepath: str):
               '--nonzero-pixel-threshold',
               help='percentage of non zero picels in a cell to read as lit',
               default=0.4)
-@click.argument('imagepath')
-def cli(verbosity: int, debug: bool, nonzero_pixel_threshold: float, imagepath: str):
+@click.option('-c', '--capture-device', help='number of the capture device', default=0)
+@click.option('-i', '--from-file', help='read image from file instead of webcam')
+@click.option('--dilate', help='dilation iterations', default=4)
+@click.option('--digit-min-width', help='', default=60)
+@click.option('--digit-max-width', help='', default=100)
+@click.option('--digit-min-height', help='', default=100)
+@click.option('--digit-max-height', help='', default=200)
+def cli(verbosity: int, debug: bool, nonzero_pixel_threshold: float, from_file: str, capture_device: int, dilate: int,
+        digit_min_width: int, digit_max_width: int, digit_min_height: int, digit_max_height: int):
     """ main program
     """
     _configure_logging(verbosity)
 
     DEBUG = debug
-    get_edges(imagepath)
+
+    if from_file:
+        # load the example image
+        image = cv2.imread(from_file)
+    else:
+        cap = cv2.VideoCapture(capture_device)
+        if not cap.isOpened():
+            raise IOError("Cannot open webcam")
+        _, image = cap.read()
+        cap.release()
+
+    test_image("captured frame", image)
+    detect_numbers(image,
+                   dilate_iterations=dilate,
+                   digit_min_width=digit_min_width,
+                   digit_max_width=digit_max_width,
+                   digit_min_height=digit_min_height,
+                   digit_max_height=digit_max_height)
 
     return 0
 
