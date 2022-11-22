@@ -32,11 +32,11 @@ def _configure_logging(verbosity):
 DIGITS_LOOKUP = {
     (1, 1, 1, 0, 1, 1, 1): 0,
     (0, 0, 1, 0, 0, 1, 0): 1,
-    (1, 0, 1, 1, 1, 1, 0): 2,
+    (1, 0, 1, 1, 1, 0, 1): 2,
     (1, 0, 1, 1, 0, 1, 1): 3,
     (0, 1, 1, 1, 0, 1, 0): 4,
     (1, 1, 0, 1, 0, 1, 1): 5,
-    (1, 1, 0, 1, 1, 1, 1): 6,
+    (0, 1, 0, 1, 1, 1, 1): 6,
     (1, 0, 1, 0, 0, 1, 0): 7,
     (1, 1, 1, 1, 1, 1, 1): 8,
     (1, 1, 1, 1, 0, 1, 1): 9
@@ -51,10 +51,10 @@ def test_image(name, img):
 
 def detect_numbers(image,
                    dilate_iterations=4,
-                   digit_min_width=60,
-                   digit_max_width=200,
-                   digit_min_height=100,
-                   digit_max_height=200):
+                   digit_min_width=.10,
+                   digit_max_width=.15,
+                   digit_min_height=.80,
+                   digit_max_height=.90):
     # pre-process the image by resizing it, converting it to
     # graycale, blurring it, and computing an edge map
     image = imutils.resize(image, height=500)
@@ -76,7 +76,7 @@ def detect_numbers(image,
         peri = cv2.arcLength(c, True)
         approx = cv2.approxPolyDP(c, 0.02 * peri, True)
         # if the contour has four vertices, then we have found
-        # the thermostat display
+        # the display
         if len(approx) == 4:
             displayCnt = approx
             break
@@ -85,7 +85,7 @@ def detect_numbers(image,
         log.fatal("Did not find display in image")
         sys.exit(1)
 
-    # extract the thermostat display, apply a perspective transform
+    # extract the display, apply a perspective transform
     # to it
     warped = four_point_transform(gray, displayCnt.reshape(4, 2))
     output = four_point_transform(image, displayCnt.reshape(4, 2))
@@ -115,14 +115,19 @@ def detect_numbers(image,
     for c in cnts:
         # compute the bounding box of the contour
         (x, y, w, h) = cv2.boundingRect(c)
+
+        width_prct = w / output.shape[1]
+        height_prct = h / output.shape[0]
+
         if DEBUG:
-            cv2.putText(img, "{}x{}".format(w, h), (x - 10, y - 10), cv2.FONT_HERSHEY_SCRIPT_SIMPLEX, 0.5, (0, 255, 0),
-                        2)
+            cv2.putText(img, "{}x{}".format(width_prct, height_prct), (x - 10, y - 10), cv2.FONT_HERSHEY_SCRIPT_SIMPLEX,
+                        0.5, (0, 255, 0), 2)
             cv2.rectangle(img, (x, y), (x + w, y + h), (255, 0, 0), 1)
             print("({}/{}), {}x{}".format(x, y, w, h))
 
         # if the contour is sufficiently large, it must be a digit
-        if (w >= digit_min_width and w <= digit_max_width) and (h >= digit_min_height and h <= digit_max_height):
+        if (width_prct >= digit_min_width and width_prct <= digit_max_width) and (height_prct >= digit_min_height and
+                                                                                  height_prct <= digit_max_height):
             digitCnts.append(c)
 
     if DEBUG:
@@ -187,10 +192,11 @@ def detect_numbers(image,
         digit = DIGITS_LOOKUP.get(tuple(on))
         digits.append(digit)
         if DEBUG:
+            print(on)
             cv2.rectangle(output, (x, y), (x + w, y + h), (0, 255, 0), 1)
             cv2.putText(output, str(digit), (x - 10, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 0), 2)
-
             test_image("output", output)
+
     return
 
 
@@ -204,12 +210,12 @@ def detect_numbers(image,
 @click.option('-c', '--capture-device', help='number of the capture device', default=0)
 @click.option('-i', '--from-file', help='read image from file instead of webcam')
 @click.option('--dilate', help='dilation iterations', default=4)
-@click.option('--digit-min-width', help='', default=60)
-@click.option('--digit-max-width', help='', default=100)
-@click.option('--digit-min-height', help='', default=100)
-@click.option('--digit-max-height', help='', default=200)
+@click.option('--digit-min-width', help='', default=.20)
+@click.option('--digit-max-width', help='', default=.30)
+@click.option('--digit-min-height', help='', default=.30)
+@click.option('--digit-max-height', help='', default=.40)
 def cli(verbosity: int, debug: bool, nonzero_pixel_threshold: float, from_file: str, capture_device: int, dilate: int,
-        digit_min_width: int, digit_max_width: int, digit_min_height: int, digit_max_height: int):
+        digit_min_width: float, digit_max_width: float, digit_min_height: float, digit_max_height: float):
     """ main program
     """
     _configure_logging(verbosity)
